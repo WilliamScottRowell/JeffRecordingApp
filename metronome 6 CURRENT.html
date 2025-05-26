@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Manual WebM Audio Recorder with Visual Metronome</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    #recordingsList li { margin-bottom: 20px; list-style: none; }
+    button { margin: 10px 5px; padding: 10px 20px; font-size: 16px; }
+    #stopBtn { background-color: #ff4d4d; color: white; font-weight: bold; }
+    .recording-block { margin-bottom: 10px; }
+    .recording-label { display: block; font-weight: bold; margin-bottom: 4px; }
+    #flasher {
+      width: 100px;
+      height: 100px;
+      background: lightgray;
+      margin-bottom: 20px;
+    }
+    #spaceHint {
+      font-size: 14px;
+      margin-bottom: 10px;
+      color: #444;
+    }
+    #recordingIndicator {
+      color: red;
+      font-weight: bold;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎙️ Manual WebM Audio Recorder with Visual Metronome</h1>
+
+  <div id="spaceHint">Press <strong>spacebar</strong> with your practice chanter to start/stop recording</div>
+  <div id="recordingIndicator">● Recording...</div>
+  <button id="startBtn">Start Recording</button>
+  <button id="stopBtn" disabled>Stop Recording</button>
+  <p id="status">Not recording</p>
+
+  <div>
+    <h2>Metronome</h2>
+    <label for="bpmInput">BPM:</label>
+    <input type="number" id="bpmInput" value="60" min="30" max="300">
+    <button id="toggleMetronome">Start Metronome</button>
+    <div id="flasher"></div>
+  </div>
+
+  <ul id="recordingsList"></ul>
+  <h3 id="recordingCountLabel">0 recordings saved</h3>
+
+  <script>
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const status = document.getElementById('status');
+    const recordingsList = document.getElementById('recordingsList');
+    const recordingCountLabel = document.getElementById('recordingCountLabel');
+    const bpmInput = document.getElementById('bpmInput');
+    bpmInput.addEventListener('change', () => {
+      // Removed metronome auto-resume on start // only restart if toggle is active
+    });
+    const toggleMetronomeBtn = document.getElementById('toggleMetronome');
+    const flasher = document.getElementById('flasher');
+    const recordingIndicator = document.getElementById('recordingIndicator');
+
+    let mediaRecorder, chunks = [];
+    let recordingCount = 0;
+    let metronomeOn = false;
+    let metronomeInterval = null;
+    let stream = null;
+    let isRecording = false;
+
+    async function initMicStream() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          }
+        });
+        console.log('Microphone stream initialized.');
+      } catch (err) {
+        alert('Microphone access denied or unavailable.');
+        console.error(err);
+      }
+    }
+
+    function playMetronome() {
+      stopMetronome();
+      const bpm = parseInt(bpmInput.value);
+      const interval = 60000 / bpm;
+
+      metronomeInterval = setInterval(() => {
+        flasher.style.background = 'red';
+        setTimeout(() => { flasher.style.background = 'lightgray'; }, 50);
+      }, interval);
+
+      metronomeOn = true;
+      toggleMetronomeBtn.textContent = 'Stop Metronome';
+    }
+
+    function stopMetronome() {
+      if (metronomeInterval) clearInterval(metronomeInterval);
+      metronomeInterval = null;
+      metronomeOn = false;
+      toggleMetronomeBtn.textContent = 'Start Metronome';
+      flasher.style.background = 'lightgray';
+    }
+
+    toggleMetronomeBtn.onclick = () => {
+      if (metronomeOn) stopMetronome();
+      else playMetronome();
+    };
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+        status.textContent = 'Recording stopped, saving...';
+        stopBtn.disabled = true;
+        recordingIndicator.style.display = 'none';
+        isRecording = false;
+      }
+    }
+
+    startBtn.onclick = async () => {
+      if (metronomeOn) playMetronome();
+      if (!stream) {
+        alert('Microphone not initialized.');
+        return;
+      }
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      status.textContent = 'Recording...';
+      recordingIndicator.style.display = 'inline';
+      chunks = [];
+      isRecording = true;
+
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.start(2000);
+
+      mediaRecorder.ondataavailable = e => {
+        if (e.data && e.data.size > 0) {
+          chunks.push(e.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const audioURL = URL.createObjectURL(blob);
+        const audio = new Audio();
+        audio.src = audioURL;
+        audio.controls = true;
+
+        audio.onloadedmetadata = () => {
+          const resumeMetronome = metronomeOn;
+          const duration = audio.duration.toFixed(2);
+          const bpmText = metronomeOn ? `@${bpmInput.value}BPM` : '';
+          addRecording(blob, audio, audioURL, duration, bpmText);
+          stopMetronome();
+
+          audio.play();
+          audio.onended = () => {
+            if (resumeMetronome && toggleMetronomeBtn.textContent === 'Stop Metronome') {
+              playMetronome();
+            }
+          };
+        };
+
+        startBtn.disabled = false;
+        status.textContent = 'Done. You can record again.';
+      };
+    };
+
+    stopBtn.onclick = stopRecording;
+
+    document.addEventListener('keydown', (e) => {
+      if (!isRecording && e.code === 'Space') {
+        e.preventDefault();
+        startBtn.click();
+      } else if (isRecording) {
+        stopRecording();
+      }
+    });
+
+    function addRecording(blob, audio, url, duration, bpmLabel) {
+      recordingCount = recordingsList.children.length + 1;
+      const li = document.createElement('li');
+      const block = document.createElement('div');
+      block.className = 'recording-block';
+
+      const label = document.createElement('span');
+      label.className = 'recording-label';
+      label.textContent = duration && isFinite(duration) ? `Recording #${recordingCount}${bpmLabel ? ` (${duration}s) ${bpmLabel}` : ''}` : `Recording #${recordingCount}${bpmLabel ? ` ${bpmLabel}` : ''}`;
+
+      const saveBtn = document.createElement('button');
+      saveBtn.textContent = '💾 Save';
+      saveBtn.onclick = () => {
+        const a = document.createElement('a');
+        a.href = url;
+        const safeName = label.textContent.replace(/[^\w\s\-]/g, '').replace(/\s+/g, '_');
+        a.download = `${safeName || 'recording'}.webm`;
+        a.click();
+      };
+
+      const renameBtn = document.createElement('button');
+      renameBtn.textContent = '✏️ Rename';
+      renameBtn.onclick = () => {
+        const newName = prompt('Enter a name for this recording:');
+        if (newName && newName.trim()) {
+          label.textContent = `${newName.trim()} (${duration}s) ${bpmLabel}`;
+        }
+      };
+
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '🗑️ Delete';
+      delBtn.onclick = () => {
+        li.remove();
+        updateRecordingCount(-1);
+      };
+
+      block.appendChild(label);
+      block.appendChild(audio);
+      block.appendChild(saveBtn);
+      block.appendChild(renameBtn);
+      block.appendChild(delBtn);
+      li.appendChild(block);
+      recordingsList.insertBefore(li, recordingsList.firstChild);
+      updateRecordingCount(1);
+    }
+
+    function updateRecordingCount(change) {
+      recordingCount += change;
+      recordingCountLabel.textContent = `${recordingCount} recording${recordingCount !== 1 ? 's' : ''} saved`;
+    }
+
+    window.addEventListener('load', initMicStream);
+  </script>
+</body>
+</html>
