@@ -15,16 +15,8 @@
       background: lightgray;
       margin-bottom: 20px;
     }
-    #spaceHint {
-      font-size: 14px;
-      margin-bottom: 10px;
-      color: #444;
-    }
-    #recordingIndicator {
-      color: red;
-      font-weight: bold;
-      display: none;
-    }
+    #spaceHint { font-size: 14px; margin-bottom: 10px; color: #444; }
+    #recordingIndicator { color: red; font-weight: bold; display: none; }
   </style>
 </head>
 <body>
@@ -48,15 +40,72 @@
   <h3 id="recordingCountLabel">0 recordings saved</h3>
 
   <script>
+    // ---- IndexedDB Utility ----
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open("audioRecorderDB", 1);
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains("recordings")) {
+            db.createObjectStore("recordings", { keyPath: "id", autoIncrement: true });
+          }
+        };
+        request.onsuccess = (event) => resolve(event.target.result);
+        request.onerror = (event) => reject(event.target.error);
+      });
+    }
+
+    async function saveRecordingToDB(blob, label, duration, bpmLabel) {
+      const db = await openDB();
+      const tx = db.transaction("recordings", "readwrite");
+      const store = tx.objectStore("recordings");
+      const data = { blob, label, duration, bpmLabel, timestamp: Date.now() };
+      return new Promise((resolve, reject) => {
+        const request = store.add(data);
+        request.onsuccess = (event) => resolve(event.target.result); // returns id
+        request.onerror = (event) => reject(event.target.error);
+      });
+    }
+
+    async function getAllRecordingsFromDB() {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("recordings", "readonly");
+        const store = tx.objectStore("recordings");
+        const request = store.getAll();
+        request.onsuccess = (event) => resolve(event.target.result);
+        request.onerror = (event) => reject(event.target.error);
+      });
+    }
+
+    async function deleteRecordingFromDB(id) {
+      const db = await openDB();
+      const tx = db.transaction("recordings", "readwrite");
+      tx.objectStore("recordings").delete(id);
+      return tx.complete;
+    }
+
+    async function updateRecordingLabelInDB(id, newLabel) {
+      const db = await openDB();
+      const tx = db.transaction("recordings", "readwrite");
+      const store = tx.objectStore("recordings");
+      const getReq = store.get(id);
+      getReq.onsuccess = (event) => {
+        const data = event.target.result;
+        if (data) {
+          data.label = newLabel;
+          store.put(data);
+        }
+      };
+    }
+
+    // ---- Main UI & Logic ----
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
     const status = document.getElementById('status');
     const recordingsList = document.getElementById('recordingsList');
     const recordingCountLabel = document.getElementById('recordingCountLabel');
     const bpmInput = document.getElementById('bpmInput');
-    bpmInput.addEventListener('change', () => {
-      // Removed metronome auto-resume on start // only restart if toggle is active
-    });
     const toggleMetronomeBtn = document.getElementById('toggleMetronome');
     const flasher = document.getElementById('flasher');
     const recordingIndicator = document.getElementById('recordingIndicator');
@@ -136,7 +185,7 @@
       isRecording = true;
 
       mediaRecorder = new MediaRecorder(stream);
-      mediaRecorder.start(2000);
+      mediaRecorder.start();
 
       mediaRecorder.ondataavailable = e => {
         if (e.data && e.data.size > 0) {
@@ -147,23 +196,16 @@
       mediaRecorder.onstop = async () => {
         const blob = new Blob(chunks, { type: 'audio/webm' });
         const audioURL = URL.createObjectURL(blob);
-        const audio = new Audio();
-        audio.src = audioURL;
+        const audio = new Audio(audioURL);
         audio.controls = true;
 
-        audio.onloadedmetadata = () => {
-          const resumeMetronome = metronomeOn;
-          const duration = audio.duration.toFixed(2);
-          const bpmText = metronomeOn ? `@${bpmInput.value}BPM` : '';
-          addRecording(blob, audio, audioURL, duration, bpmText);
+        audio.onloadedmetadata = async () => {
+          const duration = audio.duration ? audio.duration.toFixed(2) : '';
+          const bpmText = metronomeOn ? `${bpmInput.value}BPM` : '';
+          const labelText = `Recording #${recordingsList.children.length + 1}${bpmText ? ` (${duration}s) ${bpmText}` : ''}`;
+          const dbId = await saveRecordingToDB(blob, labelText, duration, bpmText);
+          addRecording(blob, audio, audioURL, duration, bpmText, dbId);
           stopMetronome();
-
-          audio.play();
-          audio.onended = () => {
-            if (resumeMetronome && toggleMetronomeBtn.textContent === 'Stop Metronome') {
-              playMetronome();
-            }
-          };
         };
 
         startBtn.disabled = false;
@@ -182,23 +224,26 @@
       }
     });
 
-    function addRecording(blob, audio, url, duration, bpmLabel) {
-      recordingCount = recordingsList.children.length + 1;
+    function addRecording(blob, audio, url, duration, bpmLabel, dbId) {
       const li = document.createElement('li');
       const block = document.createElement('div');
       block.className = 'recording-block';
 
       const label = document.createElement('span');
       label.className = 'recording-label';
-      label.textContent = duration && isFinite(duration) ? `Recording #${recordingCount}${bpmLabel ? ` (${duration}s) ${bpmLabel}` : ''}` : `Recording #${recordingCount}${bpmLabel ? ` ${bpmLabel}` : ''}`;
+      label.textContent = duration && isFinite(duration) ? 
+        `Recording #${recordingsList.children.length + 1}${bpmLabel ? ` (${duration}s) ${bpmLabel}` : ''}` : 
+        `Recording #${recordingsList.children.length + 1}${bpmLabel ? ` ${bpmLabel}` : ''}`;
+
+      if (dbId) li.dataset.dbid = dbId;
 
       const saveBtn = document.createElement('button');
       saveBtn.textContent = '💾 Save';
       saveBtn.onclick = () => {
         const a = document.createElement('a');
         a.href = url;
-        const safeName = label.textContent.replace(/[^\w\s\-]/g, '').replace(/\s+/g, '_');
-        a.download = `${safeName || 'recording'}.webm`;
+        const safeName = (label.textContent || 'recording').replace(/[^\w\s\-]/g, '').replace(/\s+/g, '_');
+        a.download = `${safeName}.webm`;
         a.click();
       };
 
@@ -207,7 +252,8 @@
       renameBtn.onclick = () => {
         const newName = prompt('Enter a name for this recording:');
         if (newName && newName.trim()) {
-          label.textContent = `${newName.trim()} (${duration}s) ${bpmLabel}`;
+          label.textContent = `${newName.trim()}${duration ? ` (${duration}s)` : ''} ${bpmLabel}`;
+          if (dbId) updateRecordingLabelInDB(Number(dbId), label.textContent);
         }
       };
 
@@ -216,6 +262,7 @@
       delBtn.onclick = () => {
         li.remove();
         updateRecordingCount(-1);
+        if (dbId) deleteRecordingFromDB(Number(dbId));
       };
 
       block.appendChild(label);
@@ -233,7 +280,19 @@
       recordingCountLabel.textContent = `${recordingCount} recording${recordingCount !== 1 ? 's' : ''} saved`;
     }
 
-    window.addEventListener('load', initMicStream);
+    // ---- Load IndexedDB Recordings on Page Load ----
+    window.addEventListener('load', async () => {
+      await initMicStream();
+      const recordings = await getAllRecordingsFromDB();
+      recordingCount = 0;
+      recordingsList.innerHTML = '';
+      for (const r of recordings) {
+        const url = URL.createObjectURL(r.blob);
+        const audio = new Audio(url);
+        audio.controls = true;
+        addRecording(r.blob, audio, url, r.duration, r.bpmLabel, r.id);
+      }
+    });
   </script>
 </body>
 </html>
