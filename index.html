@@ -193,20 +193,21 @@
         }
       };
 
-      mediaRecorder.onstop = async () => {
-        const blob = new Blob(chunks, { type: 'audio/webm' });
-        const audioURL = URL.createObjectURL(blob);
-        const audio = new Audio(audioURL);
-        audio.controls = true;
+mediaRecorder.onstop = async () => {
+  const blob = new Blob(chunks, { type: 'audio/webm' });
+  const audioURL = URL.createObjectURL(blob);
+  const audio = new Audio(audioURL);
+  audio.controls = true;
 
-        audio.onloadedmetadata = async () => {
-          const duration = audio.duration ? audio.duration.toFixed(2) : '';
-          const bpmText = metronomeOn ? `${bpmInput.value}BPM` : '';
-          const labelText = `Recording #${recordingsList.children.length + 1}${bpmText ? ` (${duration}s) ${bpmText}` : ''}`;
-          const dbId = await saveRecordingToDB(blob, labelText, duration, bpmText);
-          addRecording(blob, audio, audioURL, duration, bpmText, dbId);
-          stopMetronome();
-        };
+  const labelText = `Recording #${recordingsList.children.length + 1}`;
+  const dbId = await saveRecordingToDB(blob, labelText, '', '');
+  addRecording(blob, audio, audioURL, '', '', dbId); // skip duration/BPM for mobile
+
+  stopMetronome();
+  startBtn.disabled = false;
+  status.textContent = 'Done. You can record again.';
+};
+
 
         startBtn.disabled = false;
         status.textContent = 'Done. You can record again.';
