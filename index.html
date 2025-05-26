@@ -199,14 +199,31 @@ mediaRecorder.onstop = async () => {
   const audio = new Audio(audioURL);
   audio.controls = true;
 
-  const labelText = `Recording #${recordingsList.children.length + 1}`;
-  const dbId = await saveRecordingToDB(blob, labelText, '', '');
-  addRecording(blob, audio, audioURL, '', '', dbId); // skip duration/BPM for mobile
+  const baseLabel = `Recording #${recordingsList.children.length + 1}`;
+  const dbId = await saveRecordingToDB(blob, baseLabel, '', '');
+
+  // Add immediately, label without duration for now
+  addRecording(blob, audio, audioURL, '', '', dbId, baseLabel);
+
+  // Try to get duration, and update label in DB and UI if possible
+  audio.onloadedmetadata = () => {
+    const duration = audio.duration ? audio.duration.toFixed(2) : '';
+    const newLabel = `${baseLabel}${duration ? ` (${duration}s)` : ''}`;
+    // Update the label in the UI (find by dbId)
+    const li = recordingsList.querySelector(`li[data-dbid='${dbId}']`);
+    if (li) {
+      const labelSpan = li.querySelector('.recording-label');
+      if (labelSpan) labelSpan.textContent = newLabel;
+    }
+    // Update label in IndexedDB
+    updateRecordingLabelInDB(Number(dbId), newLabel);
+  };
 
   stopMetronome();
   startBtn.disabled = false;
   status.textContent = 'Done. You can record again.';
 };
+
 
 
         startBtn.disabled = false;
@@ -225,18 +242,20 @@ mediaRecorder.onstop = async () => {
       }
     });
 
-    function addRecording(blob, audio, url, duration, bpmLabel, dbId) {
-      const li = document.createElement('li');
-      const block = document.createElement('div');
-      block.className = 'recording-block';
+    function addRecording(blob, audio, url, duration, bpmLabel, dbId, customLabel) {
+  const li = document.createElement('li');
+  const block = document.createElement('div');
+  block.className = 'recording-block';
 
-      const label = document.createElement('span');
-      label.className = 'recording-label';
-      label.textContent = duration && isFinite(duration) ? 
-        `Recording #${recordingsList.children.length + 1}${bpmLabel ? ` (${duration}s) ${bpmLabel}` : ''}` : 
-        `Recording #${recordingsList.children.length + 1}${bpmLabel ? ` ${bpmLabel}` : ''}`;
+  const label = document.createElement('span');
+  label.className = 'recording-label';
+  label.textContent = customLabel || (
+    duration && isFinite(duration)
+      ? `Recording #${recordingsList.children.length + 1}${bpmLabel ? ` (${duration}s) ${bpmLabel}` : ''}`
+      : `Recording #${recordingsList.children.length + 1}${bpmLabel ? ` ${bpmLabel}` : ''}`
+  );
 
-      if (dbId) li.dataset.dbid = dbId;
+  if (dbId) li.dataset.dbid = dbId;
 
       const saveBtn = document.createElement('button');
       saveBtn.textContent = '💾 Save';
